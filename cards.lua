@@ -125,6 +125,7 @@ function M.new_layout(...)
 				cardpos = {},
 				cardidx = {},
 				poscache = {},
+				poslist = {},
 			      }, LayoutMeta)
     self:init_positions(...)
     self.deck = shuffle(self,allcards)
@@ -262,6 +263,7 @@ function LayoutMethods:add_position(name, idx, x, y, posfn)
 				poscache = false
 			      }, PositionMeta)
     self.pos[name][idx] = npos
+    self.poslist[1+#self.poslist] = { npos, name, idx }
     return npos
 end
     
@@ -275,6 +277,19 @@ function LayoutMethods:init_positions(poslist)
 	end
     end
     return self
+end
+
+-- iterator
+function LayoutMethods:positions()
+    local tbl = self.poslist
+    local i = 0
+    return
+	function()
+	    i = i + 1
+	    local e = tbl[i]
+	    if e == nil then return end
+	    return e[1], e[2], e[3]
+	end, nil, nil
 end
 
 function LayoutMeta:__call(name,idx)

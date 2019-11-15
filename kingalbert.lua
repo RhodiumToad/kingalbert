@@ -12,74 +12,6 @@ local anim_step = 17
 
 local position
 
--- basic card moves
-
-local function in_sequence(a,b)
-    return a:value() == b:value() + 1
-	and a:colour() ~= b:colour()
-end
-
-local function longest_sequence_len(depot)
-    local cards = depot:cardlist()
-    local ncards = #cards
-    local pos = ncards
-    if ncards == 0 then
-	return 0
-    end
-    while pos > 1 do
-	if not in_sequence(cards[pos-1],cards[pos]) then
-	    break
-	end
-	pos = pos - 1
-    end
-    return ncards - pos + 1
-end
-	
-local function free_positions()
-    local n = 0
-    for i = 1,9 do
-	if position("depot",i):empty() then
-	    n = n + 1
-	end
-    end
-    return n
-end
-
-local function max_move_size(nspare)
-    if nspare > 0 then
-	return 1 << nspare
-    else
-	return 1
-    end
-end
-
--- is a simple move of the card to the destination allowed?
-
-local function can_move(card,to)
-    local from = card:pos()
-    if card and card == from:topcard() then
-	local dstcard = to:topcard()
-	local dsttype = to.name
-	if dsttype == "aces" then
-	    if not dstcard then
-		return card:value() == 1
-	    else
-		return card:suit() == dstcard:suit()
-		    and card:value() == (dstcard:value() + 1)
-	    end
-	elseif dsttype == "depot" then
-	    if card:value() == 1 then
-		return false
-	    elseif not dstcard then
-		return true
-	    else
-		return in_sequence(dstcard, card)
-	    end
-	end
-    end
-    return false
-end
-
 -- event management and coroutine stuff.
 
 local GuardMethods = {}
@@ -151,6 +83,77 @@ local function codefer(func,...)
     cowrap(coroutine.create(function(...) update() func(...) end),...)
 end
 
+-- basic card moves
+
+local function in_sequence(a,b)
+    return a:value() == b:value() + 1
+	and a:colour() ~= b:colour()
+end
+
+local function longest_sequence_len(depot)
+    local cards = depot:cardlist()
+    local ncards = #cards
+    local pos = ncards
+    if ncards == 0 then
+	return 0
+    end
+    while pos > 1 do
+	if not in_sequence(cards[pos-1],cards[pos]) then
+	    break
+	end
+	pos = pos - 1
+    end
+    return ncards - pos + 1
+end
+	
+local function free_positions()
+    local n = 0
+    for i = 1,9 do
+	if position("depot",i):empty() then
+	    n = n + 1
+	end
+    end
+    return n
+end
+
+local function max_move_size(nspare)
+    if nspare > 0 then
+	return 1 << nspare
+    else
+	return 1
+    end
+end
+
+-- is a simple move of the card to the destination allowed?
+
+local function can_move(card,to)
+    local from = card:pos()
+    if card
+	and card:movable()
+	and card:pos() ~= to
+    then
+	local dstcard = to:topcard()
+	local dsttype = to.name
+	if dsttype == "aces" then
+	    if not dstcard then
+		return card:value() == 1
+	    else
+		return card:suit() == dstcard:suit()
+		    and card:value() == (dstcard:value() + 1)
+	    end
+	elseif dsttype == "depot" then
+	    if card:value() == 1 then
+		return false
+	    elseif not dstcard then
+		return true
+	    else
+		return in_sequence(dstcard, card)
+	    end
+	end
+    end
+    return false
+end
+
 --
 
 local canvas
@@ -158,6 +161,7 @@ local gameno
 local win
 local raised_card
 local selected_card
+local shown_moves
 
 -- move the card, both in the position model and on screen.
 
@@ -173,6 +177,13 @@ local function basic_card_move(card,dstpos)
 end
 
 -- same, but with animation.
+
+local function calc_accel_delay(i,n)
+    if n < 3 then
+	return anim_time
+    end
+    return math.max(2*anim_step, anim_time * (0.666 ^ (i-1)))
+end
 
 local function animate_card_move(card,dstpos)
     local item,dx,dy = basic_card_move(card,dstpos)
@@ -267,8 +278,8 @@ local function auto_drain()
     position:pop_state()
     assert(rc,moves)
     if moves then
-	for _,m in ipairs(moves) do
-	    pause(math.ceil(anim_time * 0.75))
+	for i,m in ipairs(moves) do
+	    pause(calc_accel_delay(i,#moves))
 	    animate_card_move(m.card,m.pos)
 	end
     end
@@ -396,6 +407,24 @@ local function try_complex_move(src,dst,doit)
 	end
     end
     return true
+end
+
+local function possible_moves()
+    local moves = {}
+    for src,srcname in position:positions() do
+	local card = src:topcard()
+	if card then
+	    for pos,name in position:positions() do
+		if can_move(card,pos)
+		    or try_complex_move(src,pos,false)
+		then
+		    local boring = pos:empty()
+		    moves[1+#moves] = { card = card, src = src, dst = pos, boring = boring }
+		end
+	    end
+	end
+    end
+    return moves
 end
 
 --
@@ -533,6 +562,59 @@ local function aces_click(pos,item,i2,e)
     end
 end
 
+local function draw_moves(parent,moves)
+    for _,move in ipairs(moves) do
+	if not move.boring then
+	    local x1,y1 = move.card:coords()
+	    local x2,y2 = move.dst:coords(move.dst:topcard())
+	    local points = Goo.CanvasPoints(2)
+	    local yoff = 96
+	    if move.src.name == "stock" then
+		yoff = 24
+	    elseif move.src.name == "depot" then
+		yoff = 32 + 16*move.src.idx
+	    end
+	    points:set_point(0,x1+64,y1+96)
+	    points:set_point(1,x2+64,y2+yoff)
+	    Goo.CanvasPolyline {
+		parent = parent,
+		line_width = 5,
+		fill_color = "#aa00aa",
+		stroke_color = "#aa00aa",
+		start_arrow = false,
+		end_arrow = true,
+		points = points
+	    }
+	end
+    end
+end
+
+local function moves_show()
+    local moves = possible_moves()
+    if moves and #moves then
+	shown_moves = Goo.CanvasGroup {
+	    parent = canvas.root_item
+	}
+	codefer(draw_moves,shown_moves,moves)
+    end
+end
+
+local function moves_unshow()
+    if shown_moves then
+	shown_moves:remove()
+	shown_moves = nil
+    end
+end
+
+local function canvas_click(obj,e)
+    if e.button == 2 then
+	moves_unshow()
+	if e.type == "BUTTON_PRESS" then
+	    moves_show()
+	end
+    end
+end
+
 --
 
 local function initial_render(card)
@@ -579,7 +661,9 @@ local function restart_game()
     
     canvas = Goo.Canvas {
 	id = 'canvas',
-	width = cwidth, height = cheight
+	width = cwidth, height = cheight,
+	on_button_press_event = function(...) guard(canvas_click,...) end,
+	on_button_release_event = function(...) canvas_click(...) end,
     }
 
     canvas:set_bounds(0, 0, cwidth, cheight)
